@@ -1,0 +1,7 @@
+# Backend web
+Flask>=3.0          # fournit aussi Werkzeug (hash mot de passe, WSGI)
+SQLAlchemy>=2.0
+
+# Matériel (installés uniquement sur le Raspberry Pi)
+pyserial>=3.5
+RPi.GPIO>=0.7 ; platform_machine == "armv7l" or platform_machine == "aarch64"

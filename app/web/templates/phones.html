@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Numéros — Garage GSM{% endblock %}
+{% block content %}
+<h1 class="page-title">Numéros autorisés</h1>
+
+<div class="card">
+  <h2>Ajouter un numéro</h2>
+  <form method="post" action="{{ url_for('phones.add') }}" class="row-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="text" name="number" placeholder="+213661234567 ou 0661234567" required>
+    <input type="text" name="name" placeholder="Nom (optionnel)">
+    <label class="check"><input type="checkbox" name="enabled" checked> Activé</label>
+    <button type="submit" class="btn btn-primary">Ajouter</button>
+  </form>
+  <p class="muted">Le numéro est normalisé automatiquement (ex : +213… → 0…).</p>
+</div>
+
+<div class="card">
+  <h2>Whitelist ({{ phones|length }})</h2>
+  <div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr><th>Numéro</th><th>Nom</th><th>État</th><th class="actions">Actions</th></tr>
+    </thead>
+    <tbody>
+      {% for phone in phones %}
+      <tr>
+        <td data-label="Numéro">{{ phone.number }}</td>
+        <td data-label="Nom">
+          <form method="post" action="{{ url_for('phones.edit', phone_id=phone.id) }}" class="inline-edit">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input type="text" name="name" value="{{ phone.name or '' }}" placeholder="—">
+            <input type="hidden" name="enabled" value="{{ 'on' if phone.enabled else '' }}">
+            <button type="submit" class="btn btn-ghost btn-sm">Enregistrer</button>
+          </form>
+        </td>
+        <td data-label="État">
+          {% if phone.enabled %}
+            <span class="badge badge-on">activé</span>
+          {% else %}
+            <span class="badge badge-off">désactivé</span>
+          {% endif %}
+        </td>
+        <td class="actions">
+          <form method="post" action="{{ url_for('phones.toggle', phone_id=phone.id) }}" class="inline-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-ghost btn-sm">{{ 'Désactiver' if phone.enabled else 'Activer' }}</button>
+          </form>
+          <form method="post" action="{{ url_for('phones.delete', phone_id=phone.id) }}" class="inline-form"
+                onsubmit="return confirm('Supprimer {{ phone.number }} ?');">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button type="submit" class="btn btn-danger btn-sm">Supprimer</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td class="muted">Aucun numéro enregistré.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Erreur {{ code }} — Garage GSM{% endblock %}
+{% block content %}
+<div class="card">
+  <h1 class="page-title">Erreur {{ code }}</h1>
+  <p>{{ message }}</p>
+  <a href="{{ url_for('dashboard.index') }}" class="btn btn-primary">Retour au dashboard</a>
+</div>
+{% endblock %}

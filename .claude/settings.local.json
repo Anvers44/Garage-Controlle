@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "Bash(.venv-smoke/bin/pip install *)",
+      "Bash(.venv-smoke/bin/python -c \"import sqlalchemy; print\\('ok', sqlalchemy.__version__\\)\")",
+      "Bash(.venv-smoke/bin/python *)",
+      "Bash(GARAGE_FAKE_SERIAL=1 GARAGE_LOG_LEVEL=DEBUG GARAGE_DATABASE_URL=sqlite:///__TRACKED_VAR__/instance/dev.db GARAGE_LOG_DIR=__TRACKED_VAR__/logs timeout 4 .venv-smoke/bin/python run.py)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(chmod +x /home/bilel/Documents/gsm-access/install.sh)",
+      "Bash(GARAGE_FAKE_SERIAL=1 GARAGE_WEB_PORT=8099 GARAGE_DATABASE_URL=sqlite:///__TRACKED_VAR__/instance/dev.db GARAGE_LOG_DIR=__TRACKED_VAR__/logs .venv-smoke/bin/python run.py)",
+      "Bash(echo \"pid=$!\")",
+      "Read(//tmp/**)"
+    ]
+  }
+}

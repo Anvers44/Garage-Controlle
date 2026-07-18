@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Garage GSM{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body>
+{% if current_user %}
+<header class="topbar">
+  <div class="brand"><span class="dot"></span> Garage GSM</div>
+  <button type="button" class="nav-toggle" aria-label="Menu" aria-expanded="false"
+          aria-controls="main-nav" onclick="toggleNav()">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+  <div class="nav-backdrop" id="nav-backdrop" onclick="toggleNav(false)"></div>
+  <nav class="nav" id="main-nav">
+    <a href="{{ url_for('dashboard.index') }}" class="{{ 'active' if request.endpoint == 'dashboard.index' }}">Dashboard</a>
+    <a href="{{ url_for('dashboard.gsm') }}" class="{{ 'active' if request.endpoint == 'dashboard.gsm' }}">GSM</a>
+    <a href="{{ url_for('relay.index') }}" class="{{ 'active' if request.endpoint == 'relay.index' }}">Relais</a>
+    <a href="{{ url_for('phones.index') }}" class="{{ 'active' if request.endpoint == 'phones.index' }}">Numéros</a>
+    <a href="{{ url_for('history.index') }}" class="{{ 'active' if request.endpoint == 'history.index' }}">Historique</a>
+    <a href="{{ url_for('settings.index') }}" class="{{ 'active' if request.endpoint == 'settings.index' }}">Paramètres</a>
+    <form method="post" action="{{ url_for('auth.logout') }}" class="logout">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-ghost">Déconnexion</button>
+    </form>
+  </nav>
+</header>
+{% endif %}
+
+<main class="container">
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      <div class="flashes">
+        {% for category, message in messages %}
+          <div class="flash flash-{{ category }}">{{ message }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  {% endwith %}
+
+  {% block content %}{% endblock %}
+</main>
+
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

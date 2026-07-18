@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Historique — Garage GSM{% endblock %}
+{% block content %}
+<h1 class="page-title">Historique</h1>
+
+<div class="card">
+  <div class="card-head">
+    <h2>{{ entries|length }} derniers évènements</h2>
+    <a href="{{ url_for('history.export_csv') }}" class="btn btn-ghost btn-sm">Export CSV</a>
+  </div>
+  <div class="table-wrap">
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Date</th><th>Source</th><th>Numéro</th>
+        <th>Autorisé</th><th>Répondu</th><th>Relais</th><th>Durée</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in entries %}
+      <tr>
+        <td data-label="Date">{{ entry.date.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td data-label="Source"><span class="tag">{{ entry.source }}</span></td>
+        <td data-label="Numéro">{{ entry.phone_number }}</td>
+        <td data-label="Autorisé"><span class="{{ 'ok' if entry.authorized else 'ko' }}">{{ '✓' if entry.authorized else '✗' }}</span></td>
+        <td data-label="Répondu">{{ '✓' if entry.answered else '—' }}</td>
+        <td data-label="Relais"><span class="{{ 'ok' if entry.relay_triggered }}">{{ '✓' if entry.relay_triggered else '—' }}</span></td>
+        <td data-label="Durée">{{ '%.1f s'|format(entry.duration) if entry.duration is not none else '—' }}</td>
+      </tr>
+      {% else %}
+      <tr><td class="muted">Aucun évènement.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endblock %}

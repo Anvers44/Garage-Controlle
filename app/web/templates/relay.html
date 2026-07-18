@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Relais — Garage GSM{% endblock %}
+{% block content %}
+<h1 class="page-title">Relais</h1>
+
+<div class="grid">
+  <div class="card">
+    <h2>État</h2>
+    <dl class="kv">
+      <dt>État actuel</dt>
+      <dd><span class="badge {{ 'badge-on' if active else 'badge-off' }}">{{ 'ACTIF' if active else 'repos' }}</span></dd>
+      <dt>Durée d'impulsion</dt><dd>{{ '%.2f'|format(pulse) }} s</dd>
+      <dt>Activations (récentes)</dt><dd>{{ events|length }}</dd>
+    </dl>
+    <form method="post" action="{{ url_for('relay.trigger') }}" class="inline-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <button type="submit" class="btn btn-primary">Déclencher manuellement</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Derniers déclenchements</h2>
+    <div class="table-wrap">
+    <table class="table">
+      <thead><tr><th>Date</th><th>Source</th><th>Durée</th></tr></thead>
+      <tbody>
+        {% for event in events %}
+        <tr>
+          <td data-label="Date">{{ event.triggered_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+          <td data-label="Source"><span class="tag">{{ event.source }}</span></td>
+          <td data-label="Durée">{{ '%.2f s'|format(event.duration) if event.duration is not none else '—' }}</td>
+        </tr>
+        {% else %}
+        <tr><td class="muted">Aucun déclenchement.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    </div>
+  </div>
+</div>
+{% endblock %}

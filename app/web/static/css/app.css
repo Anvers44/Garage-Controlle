@@ -1,0 +1,312 @@
+/* ============================================================
+   Garage GSM — feuille de style mobile-first.
+   Les styles de base ciblent le mobile ; les media queries
+   (min-width) enrichissent l'affichage sur écrans plus larges.
+   ============================================================ */
+
+:root {
+  --bg: #0f172a;
+  --bg-card: #1e293b;
+  --bg-elev: #273449;
+  --border: #334155;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --primary: #2563eb;
+  --primary-h: #1d4ed8;
+  --success: #16a34a;
+  --danger: #dc2626;
+  --warning: #d97706;
+  --radius: 12px;
+  --tap: 44px;               /* cible tactile minimale */
+  --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: #93c5fd; text-decoration: none; }
+
+/* ---------- Topbar ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .7rem 1rem;
+  padding-top: calc(.7rem + env(safe-area-inset-top, 0px));
+  background: rgba(30, 41, 59, .95);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+}
+.brand {
+  font-weight: 700;
+  font-size: 1.1rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  margin-right: auto;
+}
+.dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(22,163,74,.25);
+}
+
+/* Bouton hamburger (mobile uniquement) */
+.nav-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--tap);
+  height: var(--tap);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+}
+.nav-toggle svg { width: 22px; height: 22px; }
+
+/* Navigation : tiroir déroulant en mobile */
+.nav {
+  display: none;
+  position: fixed;
+  top: 0; right: 0;
+  height: 100dvh;
+  width: min(78vw, 300px);
+  padding: calc(1rem + env(safe-area-inset-top, 0px)) 1rem 1rem;
+  flex-direction: column;
+  gap: .35rem;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  box-shadow: -12px 0 40px rgba(0,0,0,.5);
+  z-index: 40;
+  overflow-y: auto;
+}
+.nav.open { display: flex; }
+.nav a {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap);
+  padding: .6rem .9rem;
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 1rem;
+}
+.nav a:hover { background: var(--bg-elev); }
+.nav a.active { background: var(--primary); color: #fff; }
+.nav .logout { margin-top: auto; }
+.nav .logout .btn { width: 100%; }
+
+/* Voile derrière le tiroir */
+.nav-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.5);
+  z-index: 35;
+}
+.nav-backdrop.open { display: block; }
+
+/* ---------- Layout ---------- */
+.container {
+  max-width: 1100px;
+  margin: 1rem auto;
+  padding: 0 1rem calc(1.5rem + var(--safe-b));
+}
+.page-title { margin: .25rem 0 1rem; font-size: 1.4rem; }
+.grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.1rem 1.2rem;
+  margin-bottom: 1rem;
+}
+.card h2 { margin: 0 0 .8rem; font-size: 1.05rem; color: #cbd5e1; }
+.card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: .5rem;
+  flex-wrap: wrap;
+}
+
+/* ---------- Action rapide (ouvrir le garage) ---------- */
+.hero {
+  display: flex;
+  flex-direction: column;
+  gap: .9rem;
+  align-items: stretch;
+  text-align: center;
+}
+.hero .btn-open {
+  min-height: 64px;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: .02em;
+}
+
+/* ---------- Key/value ---------- */
+.kv { display: grid; grid-template-columns: auto 1fr; gap: .5rem 1rem; margin: 0; }
+.kv dt { color: var(--muted); }
+.kv dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ---------- Tables (défilables + empilées en mobile) ---------- */
+.table-wrap { width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.table { width: 100%; border-collapse: collapse; font-size: .92rem; }
+.table th, .table td { padding: .6rem; text-align: left; border-bottom: 1px solid var(--border); }
+.table th { color: var(--muted); font-weight: 600; }
+.table td.actions, .table th.actions { text-align: right; white-space: nowrap; }
+
+/* Sous 640px : chaque ligne devient une carte, en-têtes via data-label. */
+@media (max-width: 639px) {
+  .table thead { display: none; }
+  .table, .table tbody, .table tr, .table td { display: block; width: 100%; }
+  .table tr {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .4rem .2rem;
+    margin-bottom: .7rem;
+    background: var(--bg-elev);
+  }
+  .table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 1rem;
+    border-bottom: 1px solid rgba(148,163,184,.12);
+    padding: .5rem .8rem;
+    text-align: right;
+  }
+  .table tr td:last-child { border-bottom: 0; }
+  .table td::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-weight: 600;
+    text-align: left;
+    flex: 0 0 auto;
+  }
+  .table td.actions { justify-content: flex-end; }
+  .table td.actions::before { content: none; }
+}
+
+/* ---------- Forms ---------- */
+label { display: block; margin: .7rem 0; color: var(--muted); font-size: .92rem; }
+label.check { display: flex; align-items: center; gap: .6rem; min-height: var(--tap); }
+label.check input { width: 20px; height: 20px; }
+input[type=text], input[type=password], input[type=number], input[type=time], select {
+  width: 100%;
+  margin-top: .3rem;
+  min-height: var(--tap);
+  padding: .6rem .7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  font-size: 16px;             /* évite le zoom auto iOS */
+}
+input:focus, select:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+.row-form { display: flex; flex-direction: column; gap: .6rem; }
+.row-form input[type=text] { margin-top: 0; }
+.inline-form { display: inline-flex; gap: .4rem; margin: 0; align-items: center; }
+.inline-edit { display: flex; gap: .4rem; margin: 0; align-items: center; }
+.inline-edit input[type=text] { margin-top: 0; }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap);
+  padding: .6rem 1rem;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  font-size: .95rem;
+  cursor: pointer;
+  color: #fff;
+  background: var(--bg-elev);
+}
+.btn:active { transform: translateY(1px); }
+.btn-sm { min-height: 36px; padding: .35rem .7rem; font-size: .85rem; }
+.btn-block { width: 100%; }
+.btn-primary { background: var(--primary); }
+.btn-primary:hover { background: var(--primary-h); }
+.btn-success { background: var(--success); }
+.btn-danger { background: var(--danger); }
+.btn-warning { background: var(--warning); }
+.btn-ghost { background: transparent; border-color: var(--border); color: var(--text); }
+.btn-ghost:hover { background: var(--bg-elev); }
+
+.actions-row { display: flex; flex-wrap: wrap; gap: .5rem; }
+
+/* ---------- Badges / tags ---------- */
+.badge { padding: .2rem .6rem; border-radius: 999px; font-size: .78rem; font-weight: 600; }
+.badge-on { background: rgba(22,163,74,.2); color: #4ade80; }
+.badge-off { background: rgba(148,163,184,.15); color: var(--muted); }
+.tag { padding: .15rem .5rem; border-radius: 6px; background: var(--bg-elev); font-size: .78rem; }
+
+/* ---------- Flashes ---------- */
+.flashes { margin-bottom: 1rem; }
+.flash { padding: .8rem 1rem; border-radius: 10px; margin-bottom: .5rem; border: 1px solid var(--border); }
+.flash-success { background: rgba(22,163,74,.15); border-color: var(--success); }
+.flash-danger { background: rgba(220,38,38,.15); border-color: var(--danger); }
+.flash-warning { background: rgba(217,119,6,.15); border-color: var(--warning); }
+
+.muted { color: var(--muted); font-size: .85rem; }
+.ok { color: #4ade80; } .ko { color: #f87171; }
+
+/* ---------- Login ---------- */
+.login-wrap { min-height: 82vh; display: flex; align-items: center; justify-content: center; }
+.login-card { width: 100%; max-width: 340px; }
+.login-title { font-size: 1.3rem; margin: 0 0 1rem; display: flex; gap: .5rem; align-items: center; }
+
+/* ============================================================
+   Écrans larges (tablette / desktop)
+   ============================================================ */
+@media (min-width: 768px) {
+  .nav-toggle { display: none; }
+  .nav-backdrop { display: none !important; }
+  .nav {
+    display: flex;
+    position: static;
+    height: auto;
+    width: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: .25rem;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+    overflow: visible;
+  }
+  .nav a { min-height: auto; padding: .45rem .8rem; color: var(--muted); font-size: .95rem; }
+  .nav a:hover { color: var(--text); }
+  .nav .logout { margin-top: 0; margin-left: .5rem; }
+  .nav .logout .btn { width: auto; }
+  .container { margin: 1.5rem auto; }
+  .page-title { font-size: 1.6rem; }
+  .grid { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .row-form { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .row-form input[type=text] { width: auto; flex: 1; min-width: 180px; }
+}

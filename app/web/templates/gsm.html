@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}GSM — Garage GSM{% endblock %}
+{% block content %}
+<h1 class="page-title">Module GSM</h1>
+
+<div class="grid">
+  <div class="card">
+    <h2>État du modem</h2>
+    <dl class="kv">
+      <dt>Signal</dt><dd>{{ status.signal if status.signal is not none else '-' }} / 31</dd>
+      <dt>Opérateur</dt><dd>{{ status.operator or '-' }}</dd>
+      <dt>IMEI</dt><dd>{{ status.imei or '-' }}</dd>
+      <dt>ICCID</dt><dd>{{ status.iccid or '-' }}</dd>
+      <dt>SIM prête</dt><dd>{{ 'Oui' if status.sim_ready else 'Non' }}</dd>
+      <dt>Réseau enregistré</dt><dd>{{ 'Oui' if status.network_registered else 'Non' }}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Actions</h2>
+    <div class="actions-row">
+      <form method="post" action="{{ url_for('dashboard.gsm_test') }}" class="inline-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-primary">Test communication</button>
+      </form>
+      <form method="post" action="{{ url_for('dashboard.gsm_reboot') }}" class="inline-form"
+            onsubmit="return confirm('Redémarrer le modem ?');">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-warning">Redémarrer le modem</button>
+      </form>
+    </div>
+    <p class="muted">Le redémarrage du modem interrompt brièvement le service GSM.</p>
+  </div>
+</div>
+{% endblock %}

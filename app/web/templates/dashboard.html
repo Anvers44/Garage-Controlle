@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Garage GSM{% endblock %}
+{% block content %}
+<h1 class="page-title">Dashboard</h1>
+
+<div class="card hero">
+  <div>
+    Relais :
+    <span class="badge" data-field="relay.active" data-badge>{{ 'ACTIF' if data.relay.active else 'repos' }}</span>
+  </div>
+  <form method="post" action="{{ url_for('relay.trigger') }}">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn-success btn-block btn-open">Ouvrir le garage</button>
+  </form>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Réseau GSM</h2>
+    <dl class="kv">
+      <dt>Signal</dt><dd><span data-field="gsm.signal">{{ data.gsm.signal if data.gsm.signal is not none else '-' }}</span> / 31</dd>
+      <dt>Opérateur</dt><dd data-field="gsm.operator">{{ data.gsm.operator or '-' }}</dd>
+      <dt>SIM prête</dt><dd data-field="gsm.sim_ready" data-bool>{{ data.gsm.sim_ready }}</dd>
+      <dt>Réseau</dt><dd data-field="gsm.network_registered" data-bool>{{ data.gsm.network_registered }}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Activité du jour</h2>
+    <dl class="kv">
+      <dt>Appels reçus</dt><dd data-field="stats.total_calls">{{ data.stats.total_calls }}</dd>
+      <dt>Appels autorisés</dt><dd data-field="stats.authorized_calls">{{ data.stats.authorized_calls }}</dd>
+      <dt>Ouvertures (appel)</dt><dd data-field="stats.call_openings">{{ data.stats.call_openings }}</dd>
+      <dt>Ouvertures (SMS)</dt><dd data-field="stats.sms_openings">{{ data.stats.sms_openings }}</dd>
+      <dt>Tentatives refusées</dt><dd data-field="stats.refused_attempts">{{ data.stats.refused_attempts }}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>Système</h2>
+    <dl class="kv">
+      <dt>Hostname</dt><dd data-field="system.hostname">{{ data.system.hostname }}</dd>
+      <dt>IP</dt><dd data-field="system.ip">{{ data.system.ip or '-' }}</dd>
+      <dt>CPU</dt><dd><span data-field="system.cpu_percent">{{ data.system.cpu_percent if data.system.cpu_percent is not none else '-' }}</span> %</dd>
+      <dt>Température</dt><dd><span data-field="system.cpu_temp">{{ data.system.cpu_temp if data.system.cpu_temp is not none else '-' }}</span> °C</dd>
+      <dt>RAM</dt><dd><span data-field="system.memory.percent">{{ data.system.memory.percent if data.system.memory else '-' }}</span> %</dd>
+      <dt>Disque</dt><dd><span data-field="system.disk.percent">{{ data.system.disk.percent if data.system.disk else '-' }}</span> %</dd>
+      <dt>Uptime</dt><dd data-field="system.uptime_seconds" data-duration>{{ data.system.uptime_seconds | duration }}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <h2>État</h2>
+    <dl class="kv">
+      <dt>Relais</dt>
+      <dd><span class="badge" data-field="relay.active" data-badge>{{ 'ACTIF' if data.relay.active else 'repos' }}</span></dd>
+      <dt>Version</dt><dd>{{ data.version }}</dd>
+    </dl>
+    <p class="muted">Mise à jour automatique toutes les 5 s.</p>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>startDashboardPolling("{{ url_for('dashboard.api_status') }}");</script>
+{% endblock %}

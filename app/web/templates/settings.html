@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block title %}Paramètres — Garage GSM{% endblock %}
+{% block content %}
+<h1 class="page-title">Paramètres</h1>
+
+{% if uses_default_password %}
+<div class="flash flash-warning">
+  Le mot de passe administrateur est encore <strong>admin/admin</strong> : changez-le ci-dessous.
+</div>
+{% endif %}
+
+<form method="post" action="{{ url_for('settings.save') }}">
+  <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+  <div class="card">
+    <h2>Appels &amp; Relais</h2>
+    <label>Durée de décroché (s)
+      <input type="number" step="0.1" name="call_answer_duration_seconds" value="{{ values.call_answer_duration_seconds }}">
+    </label>
+    <label>Durée d'impulsion relais (s)
+      <input type="number" step="0.1" name="relay_pulse_seconds" value="{{ values.relay_pulse_seconds }}">
+    </label>
+  </div>
+
+  <div class="card">
+    <h2>SMS</h2>
+    <label class="check"><input type="checkbox" name="sms_enabled" {{ 'checked' if values.sms_enabled }}> Activer les commandes par SMS</label>
+    <label>Commande d'ouverture
+      <input type="text" name="sms_command_open" value="{{ values.sms_command_open }}">
+    </label>
+    <label>Code PIN (vide = aucun)
+      <input type="text" name="sms_command_pin" value="{{ values.sms_command_pin }}">
+    </label>
+    <label>Intervalle minimal entre 2 ouvertures SMS (s)
+      <input type="number" name="min_interval_sms_open_seconds" value="{{ values.min_interval_sms_open_seconds }}">
+    </label>
+    <label class="check"><input type="checkbox" name="sms_reply_enabled" {{ 'checked' if values.sms_reply_enabled }}> Envoyer un SMS de confirmation</label>
+    <label>Texte de confirmation
+      <input type="text" name="sms_reply_text" value="{{ values.sms_reply_text }}">
+    </label>
+  </div>
+
+  <div class="card">
+    <h2>Rapport quotidien</h2>
+    <label class="check"><input type="checkbox" name="report_enabled" {{ 'checked' if values.report_enabled }}> Activer le rapport quotidien</label>
+    <label>Heure d'envoi (HH:MM)
+      <input type="text" name="report_time" value="{{ values.report_time }}" placeholder="20:00">
+    </label>
+    <label>Destinataires (numéros séparés par des virgules)
+      <input type="text" name="report_recipients" value="{{ recipients }}" placeholder="0661234567, 0770000000">
+    </label>
+    <label class="check"><input type="checkbox" name="report_include_sms" {{ 'checked' if values.report_include_sms }}> Inclure les ouvertures par SMS</label>
+  </div>
+
+  <button type="submit" class="btn btn-primary">Enregistrer les paramètres</button>
+</form>
+
+<div class="card">
+  <h2>Rapport — test</h2>
+  <form method="post" action="{{ url_for('settings.test_report') }}" class="inline-form">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <button type="submit" class="btn btn-ghost">Envoyer un rapport de test maintenant</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Mot de passe administrateur</h2>
+  <form method="post" action="{{ url_for('settings.change_password') }}">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <label>Nouveau mot de passe
+      <input type="password" name="new_password" required>
+    </label>
+    <label>Confirmation
+      <input type="password" name="confirm_password" required>
+    </label>
+    <button type="submit" class="btn btn-warning">Changer le mot de passe</button>
+  </form>
+</div>
+{% endblock %}

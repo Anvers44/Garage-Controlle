@@ -1,0 +1,24 @@
+[Unit]
+Description=Garage Controller GSM (backend GSM + interface web)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+# Adapter User/WorkingDirectory si l'installation diffère.
+User=__USER__
+Group=__USER__
+WorkingDirectory=__APP_DIR__
+Environment=GARAGE_WEB_HOST=0.0.0.0
+Environment=GARAGE_WEB_PORT=8080
+Environment=GARAGE_LOG_LEVEL=INFO
+# En production sur le Raspberry Pi, ne PAS activer GARAGE_FAKE_SERIAL.
+ExecStart=__APP_DIR__/.venv/bin/python __APP_DIR__/run.py
+Restart=on-failure
+RestartSec=5
+# Laisse le temps aux threads série/GPIO de s'arrêter proprement.
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+[Install]
+WantedBy=multi-user.target
