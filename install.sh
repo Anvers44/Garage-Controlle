@@ -2,6 +2,7 @@
 #
 # Installation du Garage Controller GSM sur Raspberry Pi OS.
 #
+# - configure un hotspot Wi-Fi (hostapd + dnsmasq) sur wlan0 ;
 # - crée un environnement virtuel Python et installe les dépendances ;
 # - installe et active le service systemd (backend GSM + interface web) ;
 # - ajoute l'utilisateur au groupe 'dialout' (accès /dev/serial0).
@@ -13,8 +14,11 @@ set -euo pipefail
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="garage-controller"
+HOTSPOT_SERVICE="garage-hotspot"
 SERVICE_SRC="${APP_DIR}/systemd/${SERVICE_NAME}.service"
 SERVICE_DST="/etc/systemd/system/${SERVICE_NAME}.service"
+HOTSPOT_SRC="${APP_DIR}/systemd/${HOTSPOT_SERVICE}.service"
+HOTSPOT_DST="/etc/systemd/system/${HOTSPOT_SERVICE}.service"
 
 # Utilisateur cible : celui qui a lancé sudo, sinon l'utilisateur courant.
 TARGET_USER="${SUDO_USER:-$(id -un)}"
@@ -40,16 +44,27 @@ sudo -u "${TARGET_USER}" "${APP_DIR}/.venv/bin/pip" install -r "${APP_DIR}/requi
 echo "==> Accès au port série (groupe dialout)"
 usermod -aG dialout "${TARGET_USER}" || true
 
-echo "==> Installation du service systemd"
+echo "==> Configuration du hotspot Wi-Fi"
+chmod +x "${APP_DIR}/scripts/setup_hotspot.sh"
+bash "${APP_DIR}/scripts/setup_hotspot.sh"
+
+echo "==> Installation du service hotspot systemd"
+cp "${HOTSPOT_SRC}" "${HOTSPOT_DST}"
+
+echo "==> Installation du service garage systemd"
 sed -e "s#__APP_DIR__#${APP_DIR}#g" \
     -e "s#__USER__#${TARGET_USER}#g" \
     "${SERVICE_SRC}" > "${SERVICE_DST}"
 
 systemctl daemon-reload
+systemctl enable "${HOTSPOT_SERVICE}"
 systemctl enable "${SERVICE_NAME}"
+systemctl restart "${HOTSPOT_SERVICE}"
 systemctl restart "${SERVICE_NAME}"
 
 echo "==> Terminé."
-echo "    Statut  : systemctl status ${SERVICE_NAME}"
-echo "    Logs    : journalctl -u ${SERVICE_NAME} -f"
-echo "    Web     : http://<ip-du-pi>:8080  (login: admin / admin — à changer)"
+echo "    Statut hotspot : systemctl status ${HOTSPOT_SERVICE}"
+echo "    Statut garage  : systemctl status ${SERVICE_NAME}"
+echo "    Logs           : journalctl -u ${SERVICE_NAME} -f"
+echo "    Wi-Fi          : SSID=GarageControl / Password=garage1234"
+echo "    Web            : http://192.168.4.1:8080  (login: admin / admin — à changer)"

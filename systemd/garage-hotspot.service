@@ -1,0 +1,16 @@
+[Unit]
+Description=Garage Controller Wi-Fi Hotspot
+Before=garage-controller.service
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/bash -c "\
+  ip addr add 192.168.4.1/24 dev wlan0 2>/dev/null || true && \
+  ip link set wlan0 up && \
+  systemctl start hostapd dnsmasq"
+ExecStop=/bin/bash -c "systemctl stop hostapd dnsmasq"
+
+[Install]
+WantedBy=multi-user.target
