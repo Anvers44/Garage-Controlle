@@ -1,0 +1,246 @@
+diff -ruN '--exclude=__pycache__' '--exclude=.claude' orig/app/hardware/sim800.py Garage-Controlle-main/app/hardware/sim800.py
+--- orig/app/hardware/sim800.py	2026-07-19 09:10:48.000000000 +0000
++++ Garage-Controlle-main/app/hardware/sim800.py	2026-07-20 15:17:14.445328535 +0000
+@@ -382,49 +382,49 @@
+     # ------------------------------------------------------------------ #
+     # Informations modem
+     # ------------------------------------------------------------------ #
+-    def get_signal(self) -> int:
++    def get_signal(self, timeout: Optional[float] = None) -> int:
+         """Retourne le RSSI (``+CSQ``), 0-31, ou 99 si inconnu."""
+-        for line in self.command("AT+CSQ"):
++        for line in self.command("AT+CSQ", timeout=timeout):
+             match = re.search(r"\+CSQ:\s*(\d+),", line)
+             if match:
+                 return int(match.group(1))
+         return 99
+ 
+-    def get_operator(self) -> str:
++    def get_operator(self, timeout: Optional[float] = None) -> str:
+         """Retourne le nom de l'opérateur (``+COPS?``) ou une chaîne vide."""
+-        for line in self.command("AT+COPS?"):
++        for line in self.command("AT+COPS?", timeout=timeout):
+             match = re.search(r'\+COPS:\s*\d+,\d+,"([^"]*)"', line)
+             if match:
+                 return match.group(1)
+         return ""
+ 
+-    def get_imei(self) -> str:
++    def get_imei(self, timeout: Optional[float] = None) -> str:
+         """Retourne l'IMEI du modem (``AT+GSN``)."""
+-        for line in self.command("AT+GSN"):
++        for line in self.command("AT+GSN", timeout=timeout):
+             if line.isdigit():
+                 return line
+         return ""
+ 
+-    def get_iccid(self) -> str:
++    def get_iccid(self, timeout: Optional[float] = None) -> str:
+         """Retourne l'ICCID de la SIM (``AT+CCID``)."""
+-        for line in self.command("AT+CCID"):
++        for line in self.command("AT+CCID", timeout=timeout):
+             digits = re.sub(r"\D", "", line)
+             if len(digits) >= 18:
+                 return digits
+         return ""
+ 
+-    def network_registered(self) -> bool:
++    def network_registered(self, timeout: Optional[float] = None) -> bool:
+         """Indique si le modem est enregistré sur le réseau (``+CREG?``)."""
+-        for line in self.command("AT+CREG?"):
++        for line in self.command("AT+CREG?", timeout=timeout):
+             match = re.search(r"\+CREG:\s*\d+,\s*(\d+)", line)
+             if match:
+                 return match.group(1) in ("1", "5")
+         return False
+ 
+-    def sim_ready(self) -> bool:
++    def sim_ready(self, timeout: Optional[float] = None) -> bool:
+         """Indique si la SIM est prête (``+CPIN: READY``)."""
+         try:
+-            lines = self.command("AT+CPIN?")
++            lines = self.command("AT+CPIN?", timeout=timeout)
+         except SIM800Error:
+             return False
+         return any("READY" in line for line in lines)
+diff -ruN '--exclude=__pycache__' '--exclude=.claude' orig/app/services/gsm_service.py Garage-Controlle-main/app/services/gsm_service.py
+--- orig/app/services/gsm_service.py	2026-07-19 09:10:48.000000000 +0000
++++ Garage-Controlle-main/app/services/gsm_service.py	2026-07-20 15:18:05.932463679 +0000
+@@ -58,10 +58,24 @@
+         self._last_sms_open: Dict[str, float] = {}
+         self._rate_lock = threading.Lock()
+ 
+-        # Cache du statut GSM (les requêtes AT sont coûteuses).
+-        self._status_cache: Dict[str, object] = {}
++        # Cache du statut GSM (les requêtes AT sont coûteuses et ne doivent
++        # jamais bloquer un thread de requête web : elles sont rafraîchies
++        # en tâche de fond par ``_status_refresh_loop``).
++        self._status_cache: Dict[str, object] = {
++            "signal": None,
++            "operator": None,
++            "imei": None,
++            "iccid": None,
++            "sim_ready": None,
++            "network_registered": None,
++            "modem_reachable": None,
++        }
+         self._status_ts: float = 0.0
+         self._status_lock = threading.Lock()
++        self._status_refresh_interval = 20.0  # secondes entre 2 cycles de sondes
++        self._status_probe_timeout = 1.5  # timeout court : on veut échouer vite
++        self._status_thread: Optional[threading.Thread] = None
++        self._status_stop_event = threading.Event()
+ 
+         self._started = False
+ 
+@@ -80,17 +94,87 @@
+ 
+         self._sim.connect()
+         self._scheduler.start()
++
++        self._status_stop_event.clear()
++        self._status_thread = threading.Thread(
++            target=self._status_refresh_loop, name="gsm-status", daemon=True
++        )
++        self._status_thread.start()
++
+         self._started = True
+         logger.info("GSMService démarré.")
+ 
+     def stop(self) -> None:
+-        """Arrête le scheduler et déconnecte le modem."""
++        """Arrête le scheduler, le rafraîchissement de statut et déconnecte le modem."""
++        self._status_stop_event.set()
++        if self._status_thread is not None:
++            self._status_thread.join(timeout=5.0)
++            self._status_thread = None
+         self._scheduler.stop()
+         self._sim.disconnect()
+         self._started = False
+         logger.info("GSMService arrêté.")
+ 
+     # ------------------------------------------------------------------ #
++    # Rafraîchissement du statut GSM (thread de fond)
++    # ------------------------------------------------------------------ #
++    def _status_refresh_loop(self) -> None:
++        """Sonde le modem périodiquement et met à jour le cache.
++
++        Tourne dans son propre thread : les commandes AT (jusqu'à 6, avec un
++        timeout court chacune) ne bloquent donc jamais un thread de requête
++        Flask. Si le modem est injoignable (HAT éteint), chaque sonde échoue
++        vite (``_status_probe_timeout``) au lieu de faire attendre l'appelant
++        jusqu'à 5 s par commande.
++        """
++        while not self._status_stop_event.is_set():
++            self._refresh_status_cache()
++            self._status_stop_event.wait(self._status_refresh_interval)
++
++    def _refresh_status_cache(self) -> None:
++        timeout = self._status_probe_timeout
++        # Sonde rapide unique : si le modem ne répond même pas à un simple
++        # "AT", inutile d'attendre le timeout sur les 6 sondes suivantes.
++        try:
++            self._sim.command("AT", timeout=timeout)
++            reachable = True
++        except SIM800Error:
++            reachable = False
++
++        if not reachable:
++            with self._status_lock:
++                self._status_cache = {
++                    "signal": None,
++                    "operator": None,
++                    "imei": None,
++                    "iccid": None,
++                    "sim_ready": False,
++                    "network_registered": False,
++                    "modem_reachable": False,
++                }
++                self._status_ts = time.monotonic()
++            return
++
++        probes = {
++            "signal": self._sim.get_signal,
++            "operator": self._sim.get_operator,
++            "imei": self._sim.get_imei,
++            "iccid": self._sim.get_iccid,
++            "sim_ready": self._sim.sim_ready,
++            "network_registered": self._sim.network_registered,
++        }
++        status: Dict[str, object] = {"modem_reachable": True}
++        for key, probe in probes.items():
++            try:
++                status[key] = probe(timeout=timeout)
++            except Exception:  # pragma: no cover - dépend du modem
++                status[key] = None
++
++        with self._status_lock:
++            self._status_cache = status
++            self._status_ts = time.monotonic()
++
++    # ------------------------------------------------------------------ #
+     # Flux APPEL entrant
+     # ------------------------------------------------------------------ #
+     def on_clip(self, raw_number: str) -> None:
+@@ -312,31 +396,19 @@
+     def get_status(self, max_age: float = 10.0, force: bool = False) -> Dict[str, object]:
+         """Retourne un instantané du statut GSM (signal, opérateur, SIM…).
+ 
+-        Le résultat est mis en cache ``max_age`` secondes pour éviter d'envoyer
+-        de multiples commandes AT à chaque rafraîchissement du dashboard.
++        Lecture pure du cache maintenu par le thread ``_status_refresh_loop`` :
++        n'envoie jamais de commande AT dans le thread appelant, donc n'ajoute
++        jamais de latence à une requête web, même si le modem est éteint ou
++        injoignable. ``force`` déclenche un rafraîchissement immédiat en
++        arrière-plan (non bloquant) pour que le prochain appel voie des
++        données fraîches, mais renvoie tout de suite le cache actuel.
+         """
++        if force:
++            threading.Thread(
++                target=self._refresh_status_cache, name="gsm-status-force", daemon=True
++            ).start()
+         with self._status_lock:
+-            now = time.monotonic()
+-            if not force and self._status_cache and (now - self._status_ts) < max_age:
+-                return dict(self._status_cache)
+-
+-            probes = {
+-                "signal": self._sim.get_signal,
+-                "operator": self._sim.get_operator,
+-                "imei": self._sim.get_imei,
+-                "iccid": self._sim.get_iccid,
+-                "sim_ready": self._sim.sim_ready,
+-                "network_registered": self._sim.network_registered,
+-            }
+-            status: Dict[str, object] = {}
+-            for key, probe in probes.items():
+-                try:
+-                    status[key] = probe()
+-                except Exception:  # pragma: no cover - dépend du modem
+-                    status[key] = None
+-            self._status_cache = status
+-            self._status_ts = now
+-            return dict(status)
++            return dict(self._status_cache)
+ 
+     def reboot_modem(self) -> None:
+         """Redémarre le modem (``AT+CFUN=1,1``)."""
+diff -ruN '--exclude=__pycache__' '--exclude=.claude' orig/app/web/static/js/app.js Garage-Controlle-main/app/web/static/js/app.js
+--- orig/app/web/static/js/app.js	2026-07-19 09:10:48.000000000 +0000
++++ Garage-Controlle-main/app/web/static/js/app.js	2026-07-20 15:18:35.018217411 +0000
+@@ -51,10 +51,14 @@
+       if (resp.ok) applyStatus(await resp.json());
+     } catch (err) {
+       /* réseau indisponible : on réessaiera au prochain tick */
++    } finally {
++      // setTimeout (et non setInterval) : on ne replanifie qu'une fois le
++      // fetch précédent terminé, pour ne jamais empiler plusieurs requêtes
++      // /api/status en vol si une réponse tarde.
++      setTimeout(refresh, intervalMs);
+     }
+   }
+   refresh();
+-  setInterval(refresh, intervalMs);
+ }
+ 
+ window.startDashboardPolling = startDashboardPolling;

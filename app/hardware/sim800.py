@@ -382,49 +382,49 @@ class SIM800:
     # ------------------------------------------------------------------ #
     # Informations modem
     # ------------------------------------------------------------------ #
-    def get_signal(self) -> int:
+    def get_signal(self, timeout: Optional[float] = None) -> int:
         """Retourne le RSSI (``+CSQ``), 0-31, ou 99 si inconnu."""
-        for line in self.command("AT+CSQ"):
+        for line in self.command("AT+CSQ", timeout=timeout):
             match = re.search(r"\+CSQ:\s*(\d+),", line)
             if match:
                 return int(match.group(1))
         return 99
 
-    def get_operator(self) -> str:
+    def get_operator(self, timeout: Optional[float] = None) -> str:
         """Retourne le nom de l'opérateur (``+COPS?``) ou une chaîne vide."""
-        for line in self.command("AT+COPS?"):
+        for line in self.command("AT+COPS?", timeout=timeout):
             match = re.search(r'\+COPS:\s*\d+,\d+,"([^"]*)"', line)
             if match:
                 return match.group(1)
         return ""
 
-    def get_imei(self) -> str:
+    def get_imei(self, timeout: Optional[float] = None) -> str:
         """Retourne l'IMEI du modem (``AT+GSN``)."""
-        for line in self.command("AT+GSN"):
+        for line in self.command("AT+GSN", timeout=timeout):
             if line.isdigit():
                 return line
         return ""
 
-    def get_iccid(self) -> str:
+    def get_iccid(self, timeout: Optional[float] = None) -> str:
         """Retourne l'ICCID de la SIM (``AT+CCID``)."""
-        for line in self.command("AT+CCID"):
+        for line in self.command("AT+CCID", timeout=timeout):
             digits = re.sub(r"\D", "", line)
             if len(digits) >= 18:
                 return digits
         return ""
 
-    def network_registered(self) -> bool:
+    def network_registered(self, timeout: Optional[float] = None) -> bool:
         """Indique si le modem est enregistré sur le réseau (``+CREG?``)."""
-        for line in self.command("AT+CREG?"):
+        for line in self.command("AT+CREG?", timeout=timeout):
             match = re.search(r"\+CREG:\s*\d+,\s*(\d+)", line)
             if match:
                 return match.group(1) in ("1", "5")
         return False
 
-    def sim_ready(self) -> bool:
+    def sim_ready(self, timeout: Optional[float] = None) -> bool:
         """Indique si la SIM est prête (``+CPIN: READY``)."""
         try:
-            lines = self.command("AT+CPIN?")
+            lines = self.command("AT+CPIN?", timeout=timeout)
         except SIM800Error:
             return False
         return any("READY" in line for line in lines)

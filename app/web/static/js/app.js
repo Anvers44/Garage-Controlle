@@ -51,10 +51,14 @@ function startDashboardPolling(url, intervalMs) {
       if (resp.ok) applyStatus(await resp.json());
     } catch (err) {
       /* réseau indisponible : on réessaiera au prochain tick */
+    } finally {
+      // setTimeout (et non setInterval) : on ne replanifie qu'une fois le
+      // fetch précédent terminé, pour ne jamais empiler plusieurs requêtes
+      // /api/status en vol si une réponse tarde.
+      setTimeout(refresh, intervalMs);
     }
   }
   refresh();
-  setInterval(refresh, intervalMs);
 }
 
 window.startDashboardPolling = startDashboardPolling;

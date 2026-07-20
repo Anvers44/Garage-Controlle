@@ -19,13 +19,10 @@ rfkill unblock wifi
 # Arrêter wpa_supplicant sur cette interface (pas de réseau externe)
 systemctl stop wpa_supplicant || true
 
-# IP statique sur wlan0
-cat > /etc/network/interfaces.d/wlan0-hotspot <<EOF
-allow-hotplug ${IFACE}
-iface ${IFACE} inet static
-    address ${IP}
-    netmask 255.255.255.0
-EOF
+# Empêcher NetworkManager de gérer wlan0 (utilisé par hostapd)
+if command -v nmcli &>/dev/null; then
+    nmcli device set "${IFACE}" managed no || true
+fi
 
 # Configuration hostapd
 cat > /etc/hostapd/hostapd.conf <<EOF
@@ -34,7 +31,7 @@ driver=nl80211
 ssid=${SSID}
 hw_mode=g
 channel=6
-wmm_enabled=0
+wmm_enabled=1
 macaddr_acl=0
 auth_algs=1
 wpa=2

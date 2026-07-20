@@ -58,10 +58,24 @@ class GSMService:
         self._last_sms_open: Dict[str, float] = {}
         self._rate_lock = threading.Lock()
 
-        # Cache du statut GSM (les requêtes AT sont coûteuses).
-        self._status_cache: Dict[str, object] = {}
+        # Cache du statut GSM (les requêtes AT sont coûteuses et ne doivent
+        # jamais bloquer un thread de requête web : elles sont rafraîchies
+        # en tâche de fond par ``_status_refresh_loop``).
+        self._status_cache: Dict[str, object] = {
+            "signal": None,
+            "operator": None,
+            "imei": None,
+            "iccid": None,
+            "sim_ready": None,
+            "network_registered": None,
+            "modem_reachable": None,
+        }
         self._status_ts: float = 0.0
         self._status_lock = threading.Lock()
+        self._status_refresh_interval = 20.0  # secondes entre 2 cycles de sondes
+        self._status_probe_timeout = 1.5  # timeout court : on veut échouer vite
+        self._status_thread: Optional[threading.Thread] = None
+        self._status_stop_event = threading.Event()
 
         self._started = False
 
@@ -80,15 +94,85 @@ class GSMService:
 
         self._sim.connect()
         self._scheduler.start()
+
+        self._status_stop_event.clear()
+        self._status_thread = threading.Thread(
+            target=self._status_refresh_loop, name="gsm-status", daemon=True
+        )
+        self._status_thread.start()
+
         self._started = True
         logger.info("GSMService démarré.")
 
     def stop(self) -> None:
-        """Arrête le scheduler et déconnecte le modem."""
+        """Arrête le scheduler, le rafraîchissement de statut et déconnecte le modem."""
+        self._status_stop_event.set()
+        if self._status_thread is not None:
+            self._status_thread.join(timeout=5.0)
+            self._status_thread = None
         self._scheduler.stop()
         self._sim.disconnect()
         self._started = False
         logger.info("GSMService arrêté.")
+
+    # ------------------------------------------------------------------ #
+    # Rafraîchissement du statut GSM (thread de fond)
+    # ------------------------------------------------------------------ #
+    def _status_refresh_loop(self) -> None:
+        """Sonde le modem périodiquement et met à jour le cache.
+
+        Tourne dans son propre thread : les commandes AT (jusqu'à 6, avec un
+        timeout court chacune) ne bloquent donc jamais un thread de requête
+        Flask. Si le modem est injoignable (HAT éteint), chaque sonde échoue
+        vite (``_status_probe_timeout``) au lieu de faire attendre l'appelant
+        jusqu'à 5 s par commande.
+        """
+        while not self._status_stop_event.is_set():
+            self._refresh_status_cache()
+            self._status_stop_event.wait(self._status_refresh_interval)
+
+    def _refresh_status_cache(self) -> None:
+        timeout = self._status_probe_timeout
+        # Sonde rapide unique : si le modem ne répond même pas à un simple
+        # "AT", inutile d'attendre le timeout sur les 6 sondes suivantes.
+        try:
+            self._sim.command("AT", timeout=timeout)
+            reachable = True
+        except SIM800Error:
+            reachable = False
+
+        if not reachable:
+            with self._status_lock:
+                self._status_cache = {
+                    "signal": None,
+                    "operator": None,
+                    "imei": None,
+                    "iccid": None,
+                    "sim_ready": False,
+                    "network_registered": False,
+                    "modem_reachable": False,
+                }
+                self._status_ts = time.monotonic()
+            return
+
+        probes = {
+            "signal": self._sim.get_signal,
+            "operator": self._sim.get_operator,
+            "imei": self._sim.get_imei,
+            "iccid": self._sim.get_iccid,
+            "sim_ready": self._sim.sim_ready,
+            "network_registered": self._sim.network_registered,
+        }
+        status: Dict[str, object] = {"modem_reachable": True}
+        for key, probe in probes.items():
+            try:
+                status[key] = probe(timeout=timeout)
+            except Exception:  # pragma: no cover - dépend du modem
+                status[key] = None
+
+        with self._status_lock:
+            self._status_cache = status
+            self._status_ts = time.monotonic()
 
     # ------------------------------------------------------------------ #
     # Flux APPEL entrant
@@ -312,31 +396,19 @@ class GSMService:
     def get_status(self, max_age: float = 10.0, force: bool = False) -> Dict[str, object]:
         """Retourne un instantané du statut GSM (signal, opérateur, SIM…).
 
-        Le résultat est mis en cache ``max_age`` secondes pour éviter d'envoyer
-        de multiples commandes AT à chaque rafraîchissement du dashboard.
+        Lecture pure du cache maintenu par le thread ``_status_refresh_loop`` :
+        n'envoie jamais de commande AT dans le thread appelant, donc n'ajoute
+        jamais de latence à une requête web, même si le modem est éteint ou
+        injoignable. ``force`` déclenche un rafraîchissement immédiat en
+        arrière-plan (non bloquant) pour que le prochain appel voie des
+        données fraîches, mais renvoie tout de suite le cache actuel.
         """
+        if force:
+            threading.Thread(
+                target=self._refresh_status_cache, name="gsm-status-force", daemon=True
+            ).start()
         with self._status_lock:
-            now = time.monotonic()
-            if not force and self._status_cache and (now - self._status_ts) < max_age:
-                return dict(self._status_cache)
-
-            probes = {
-                "signal": self._sim.get_signal,
-                "operator": self._sim.get_operator,
-                "imei": self._sim.get_imei,
-                "iccid": self._sim.get_iccid,
-                "sim_ready": self._sim.sim_ready,
-                "network_registered": self._sim.network_registered,
-            }
-            status: Dict[str, object] = {}
-            for key, probe in probes.items():
-                try:
-                    status[key] = probe()
-                except Exception:  # pragma: no cover - dépend du modem
-                    status[key] = None
-            self._status_cache = status
-            self._status_ts = now
-            return dict(status)
+            return dict(self._status_cache)
 
     def reboot_modem(self) -> None:
         """Redémarre le modem (``AT+CFUN=1,1``)."""
