@@ -176,6 +176,19 @@ class SIM800:
             except SIM800Error as exc:
                 logger.warning("SIM800 init : '%s' a échoué (%s)", cmd, exc)
 
+    def is_healthy(self) -> bool:
+        """``True`` si le driver tourne et que ses deux threads sont vivants.
+
+        Sert de garde-fou complémentaire aux sondes AT : un thread mort (crash
+        Python non prévu) ne provoque pas forcément un timeout de ``command``,
+        donc on vérifie aussi explicitement l'état des threads.
+        """
+        if not self._running:
+            return False
+        reader_ok = self._reader_thread is not None and self._reader_thread.is_alive()
+        worker_ok = self._worker_thread is not None and self._worker_thread.is_alive()
+        return reader_ok and worker_ok
+
     def disconnect(self) -> None:
         """Arrête les threads et ferme le port série."""
         self._running = False

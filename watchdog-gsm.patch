@@ -1,0 +1,453 @@
+diff --git a/app/hardware/sim800.py b/app/hardware/sim800.py
+index e5c4243..2a568ab 100644
+--- a/app/hardware/sim800.py
++++ b/app/hardware/sim800.py
+@@ -176,6 +176,19 @@ class SIM800:
+             except SIM800Error as exc:
+                 logger.warning("SIM800 init : '%s' a échoué (%s)", cmd, exc)
+ 
++    def is_healthy(self) -> bool:
++        """``True`` si le driver tourne et que ses deux threads sont vivants.
++
++        Sert de garde-fou complémentaire aux sondes AT : un thread mort (crash
++        Python non prévu) ne provoque pas forcément un timeout de ``command``,
++        donc on vérifie aussi explicitement l'état des threads.
++        """
++        if not self._running:
++            return False
++        reader_ok = self._reader_thread is not None and self._reader_thread.is_alive()
++        worker_ok = self._worker_thread is not None and self._worker_thread.is_alive()
++        return reader_ok and worker_ok
++
+     def disconnect(self) -> None:
+         """Arrête les threads et ferme le port série."""
+         self._running = False
+diff --git a/app/services/gsm_service.py b/app/services/gsm_service.py
+index 9190678..3ca503d 100644
+--- a/app/services/gsm_service.py
++++ b/app/services/gsm_service.py
+@@ -17,7 +17,7 @@ import logging
+ import threading
+ import time
+ from datetime import datetime
+-from typing import Dict, Optional, Tuple
++from typing import Callable, Dict, Optional, Tuple
+ 
+ from app.hardware.sim800 import SIM800, SIM800Error
+ from app.models import RELAY_SOURCE_CALL, RELAY_SOURCE_SMS
+@@ -77,6 +77,16 @@ class GSMService:
+         self._status_thread: Optional[threading.Thread] = None
+         self._status_stop_event = threading.Event()
+ 
++        # Watchdog GSM : compte les sondes consécutives en échec et retient
++        # quelle action corrective a déjà été tentée pour ce "cycle de panne"
++        # (évite de redéclencher un reset à chaque sonde tant qu'on n'a pas
++        # récupéré). Réinitialisé dès qu'une sonde réussit à nouveau.
++        self._consecutive_failures: int = 0
++        self._watchdog_action_done: Optional[str] = None  # None | "soft" | "hard"
++        self._watchdog_lock = threading.Lock()
++        self._last_recovery_at: Optional[datetime] = None
++        self._last_recovery_action: Optional[str] = None
++
+         self._started = False
+ 
+     # ------------------------------------------------------------------ #
+@@ -128,14 +138,29 @@ class GSMService:
+         jusqu'à 5 s par commande.
+         """
+         while not self._status_stop_event.is_set():
+-            self._refresh_status_cache()
++            try:
++                self._refresh_status_cache()
++            except Exception:  # pragma: no cover - défensif
++                # Le thread de surveillance PORTE le watchdog : le laisser
++                # mourir sur une exception imprévue (ex. DB momentanément
++                # verrouillée) rendrait toute la mécanique de récupération
++                # inopérante sans que rien ne le signale. On journalise et on
++                # continue au prochain cycle plutôt que de se taire.
++                logger.exception("GSM watchdog : erreur inattendue pendant la sonde.")
+             self._status_stop_event.wait(self._status_refresh_interval)
+ 
+     def _refresh_status_cache(self) -> None:
+         timeout = self._status_probe_timeout
++        # Vérifie d'abord que le driver lui-même est vivant (threads série) :
++        # un thread mort ferait de toute façon échouer la commande AT
++        # ci-dessous, mais on le sait déjà sans attendre le timeout.
++        driver_alive = self._sim.is_healthy()
++
+         # Sonde rapide unique : si le modem ne répond même pas à un simple
+         # "AT", inutile d'attendre le timeout sur les 6 sondes suivantes.
+         try:
++            if not driver_alive:
++                raise SIM800Error("driver GSM non opérationnel (thread(s) arrêté(s))")
+             self._sim.command("AT", timeout=timeout)
+             reachable = True
+         except SIM800Error:
+@@ -153,8 +178,11 @@ class GSMService:
+                     "modem_reachable": False,
+                 }
+                 self._status_ts = time.monotonic()
++            self._handle_probe_failure(driver_alive=driver_alive)
+             return
+ 
++        self._handle_probe_success()
++
+         probes = {
+             "signal": self._sim.get_signal,
+             "operator": self._sim.get_operator,
+@@ -174,6 +202,145 @@ class GSMService:
+             self._status_cache = status
+             self._status_ts = time.monotonic()
+ 
++        self._handle_probe_success()
++
++    # ------------------------------------------------------------------ #
++    # Watchdog GSM : auto-récupération sur échecs consécutifs
++    # ------------------------------------------------------------------ #
++    def _handle_probe_success(self) -> None:
++        """Réinitialise le compteur d'échecs (le modem répond à nouveau)."""
++        with self._watchdog_lock:
++            if self._consecutive_failures > 0:
++                logger.info(
++                    "GSM watchdog : modem de nouveau opérationnel après %d sonde(s) en échec.",
++                    self._consecutive_failures,
++                )
++            self._consecutive_failures = 0
++            self._watchdog_action_done = None
++
++    def _handle_probe_failure(self, driver_alive: bool) -> None:
++        """Incrémente le compteur d'échecs et déclenche une action corrective
++        (reset logiciel puis reconnexion complète) une fois les seuils
++        configurés atteints, sans jamais répéter la même action en boucle.
++        """
++        if not self._settings.get_bool("gsm_watchdog_enabled", default=True):
++            return
++
++        with self._watchdog_lock:
++            self._consecutive_failures += 1
++            failures = self._consecutive_failures
++            action_done = self._watchdog_action_done
++
++            soft_threshold = self._settings.get_int(
++                "gsm_soft_reset_after_failures", default=3
++            )
++            hard_threshold = self._settings.get_int(
++                "gsm_hard_reconnect_after_failures", default=9
++            )
++
++            logger.warning(
++                "GSM watchdog : sonde AT en échec (%d consécutive(s), driver_vivant=%s).",
++                failures,
++                driver_alive,
++            )
++
++            # Threads morts : inutile d'attendre le seuil "soft" (un reset
++            # logiciel passerait par les mêmes threads en panne) → on va
++            # directement à la reconnexion complète.
++            need_hard = (not driver_alive) or failures >= hard_threshold
++            need_soft = (
++                not need_hard and failures >= soft_threshold and action_done is None
++            )
++
++            if need_hard and action_done != "hard":
++                self._watchdog_action_done = "hard"
++                action = "hard"
++            elif need_soft:
++                self._watchdog_action_done = "soft"
++                action = "soft"
++            else:
++                action = None
++
++        if action == "soft":
++            logger.warning(
++                "GSM watchdog : %d échecs consécutifs → reset logiciel du modem (AT+CFUN=1,1).",
++                failures,
++            )
++            self._run_recovery_action("soft", self._soft_reset_modem)
++        elif action == "hard":
++            logger.error(
++                "GSM watchdog : %d échecs consécutifs (driver_vivant=%s) → reconnexion série complète.",
++                failures,
++                driver_alive,
++            )
++            self._run_recovery_action("hard", self._hard_reconnect_modem)
++
++    def _run_recovery_action(self, name: str, action: Callable[[], None]) -> None:
++        """Exécute une action corrective en tâche de fond (ne bloque jamais
++        la boucle de sondage) et journalise le résultat.
++        """
++
++        def _worker() -> None:
++            try:
++                action()
++                logger.info("GSM watchdog : action '%s' terminée.", name)
++            except Exception:  # pragma: no cover - dépend du matériel
++                logger.exception("GSM watchdog : échec de l'action '%s'.", name)
++            finally:
++                self._last_recovery_at = datetime.now()
++                self._last_recovery_action = name
++
++        threading.Thread(
++            target=_worker, name=f"gsm-watchdog-{name}", daemon=True
++        ).start()
++
++    def _soft_reset_modem(self) -> None:
++        """Reset logiciel du modem (``AT+CFUN=1,1``), sans toucher aux threads.
++
++        Timeout volontairement court : si le modem ne répondait déjà pas à un
++        simple ``AT``, il ne répondra pas plus à ``AT+CFUN`` — pas la peine de
++        bloquer le verrou de commande (et donc les sondes suivantes) pendant
++        de longues secondes avant de pouvoir escalader vers la reconnexion
++        complète.
++        """
++        self._sim.command("AT+CFUN=1,1", timeout=3.0)
++
++    def _hard_reconnect_modem(self) -> None:
++        """Ferme et rouvre complètement la liaison série (threads compris).
++
++        Plus radical qu'un simple ``AT+CFUN`` : couvre le cas où le port
++        série ou les threads du driver sont eux-mêmes figés, pas seulement
++        le modem. Après ceci, une nouvelle sonde repartira de zéro
++        (``_consecutive_failures`` sera remis à 0 dès qu'elle réussit).
++        """
++        try:
++            self._sim.disconnect()
++        except Exception:  # pragma: no cover - best effort
++            logger.exception("GSM watchdog : erreur pendant disconnect()")
++        time.sleep(1.0)
++        self._sim.connect()
++
++    def watchdog_status(self) -> Dict[str, object]:
++        """Instantané de l'état du watchdog (pour le dashboard/diagnostic)."""
++        with self._watchdog_lock:
++            return {
++                "consecutive_failures": self._consecutive_failures,
++                "pending_action": self._watchdog_action_done,
++                "last_recovery_action": self._last_recovery_action,
++                "last_recovery_at": self._last_recovery_at,
++            }
++
++    def is_healthy(self) -> bool:
++        """Vrai si le driver GSM tourne normalement (pour le heartbeat systemd).
++
++        Volontairement tolérant : quelques sondes en échec (modem qui
++        redémarre après un reset, réseau qui reprend) ne doivent pas faire
++        tuer tout le process par le watchdog systemd — seule une panne
++        prolongée (déjà en cours de reconnexion "hard") le doit.
++        """
++        with self._watchdog_lock:
++            return self._watchdog_action_done != "hard"
++
+     # ------------------------------------------------------------------ #
+     # Flux APPEL entrant
+     # ------------------------------------------------------------------ #
+@@ -408,7 +575,9 @@ class GSMService:
+                 target=self._refresh_status_cache, name="gsm-status-force", daemon=True
+             ).start()
+         with self._status_lock:
+-            return dict(self._status_cache)
++            status = dict(self._status_cache)
++        status["watchdog"] = self.watchdog_status()
++        return status
+ 
+     def reboot_modem(self) -> None:
+         """Redémarre le modem (``AT+CFUN=1,1``)."""
+diff --git a/app/services/settings_service.py b/app/services/settings_service.py
+index 9a82226..c42991b 100644
+--- a/app/services/settings_service.py
++++ b/app/services/settings_service.py
+@@ -30,6 +30,16 @@ DEFAULT_SETTINGS: Dict[str, str] = {
+     "report_time": "20:00",
+     "report_recipients": "[]",  # JSON : liste de numéros
+     "report_include_sms": "true",
++    # Watchdog GSM (auto-récupération si le modem ne répond plus)
++    "gsm_watchdog_enabled": "true",
++    # Nombre de sondes AT consécutives en échec avant un reset logiciel du
++    # modem (AT+CFUN=1,1). Sondes espacées de ~20s (status_refresh_interval).
++    "gsm_soft_reset_after_failures": "3",
++    # Nombre de sondes en échec avant une reconnexion série complète
++    # (ferme/rouvre /dev/serial0 + relance les threads du driver). Plus
++    # radical que le reset logiciel : couvre un port série/thread figé que
++    # AT+CFUN seul ne débloque pas.
++    "gsm_hard_reconnect_after_failures": "9",
+ }
+ 
+ _TRUE_VALUES = {"1", "true", "yes", "on", "oui"}
+diff --git a/app/utils/systemd_notify.py b/app/utils/systemd_notify.py
+new file mode 100644
+index 0000000..5794aed
+--- /dev/null
++++ b/app/utils/systemd_notify.py
+@@ -0,0 +1,58 @@
++"""Notification systemd (``sd_notify``) sans dépendance externe.
++
++Permet d'utiliser le *watchdog* systemd (``WatchdogSec=`` dans l'unité) :
++si le process ne notifie plus ``WATCHDOG=1`` à temps, systemd le tue et le
++redémarre (``Restart=on-failure``). Contrairement à ``Restart=on-failure``
++seul, ceci couvre le cas d'un process qui reste en vie mais **bloqué**
++(threads morts, boucle figée), pas seulement un crash.
++
++Implémentation minimale : écrit directement sur le socket Unix indiqué par
++``$NOTIFY_SOCKET`` (fourni par systemd pour les unités ``Type=notify``).
++Ne fait rien (no-op silencieux) si la variable n'est pas définie — utile en
++dev ou hors systemd, sans avoir à installer ``python-systemd``.
++"""
++
++from __future__ import annotations
++
++import logging
++import os
++import socket
++
++logger = logging.getLogger(__name__)
++
++
++def _notify_socket_path() -> str | None:
++    path = os.environ.get("NOTIFY_SOCKET")
++    if not path:
++        return None
++    # systemd peut préfixer par '@' pour un socket abstrait (Linux).
++    if path.startswith("@"):
++        path = "\0" + path[1:]
++    return path
++
++
++def sd_notify(state: str) -> bool:
++    """Envoie une notification à systemd (ex : ``\"READY=1\"``, ``\"WATCHDOG=1\"``).
++
++    Returns:
++        ``True`` si le message a été envoyé (ou si aucun watchdog systemd
++        n'est configuré : rien à faire, ce n'est pas une erreur), ``False``
++        si l'envoi a échoué alors qu'un socket était configuré.
++    """
++    path = _notify_socket_path()
++    if not path:
++        return True  # Pas sous systemd (dev, GARAGE_FAKE_SERIAL, etc.) : no-op.
++
++    try:
++        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
++            sock.connect(path)
++            sock.sendall(state.encode("utf-8"))
++        return True
++    except OSError:
++        logger.warning("sd_notify(%r) : échec d'envoi sur %s", state, path)
++        return False
++
++
++def watchdog_enabled() -> bool:
++    """``True`` si systemd attend des pings watchdog (``WatchdogSec=`` actif)."""
++    return bool(os.environ.get("WATCHDOG_USEC")) and bool(_notify_socket_path())
+diff --git a/run.py b/run.py
+index 95553a2..c3380d2 100755
+--- a/run.py
++++ b/run.py
+@@ -23,15 +23,61 @@ Variables d'environnement utiles :
+ from __future__ import annotations
+ 
+ import logging
++import os
+ import signal
+ import threading
+ 
+ from app.backend import Backend
+ from app.config import Config
+ from app.utils.logging import setup_logging
++from app.utils.systemd_notify import sd_notify, watchdog_enabled
+ 
+ logger = logging.getLogger("garage.run")
+ 
++# Systemd notifie l'intervalle du watchdog (µs) via $WATCHDOG_USEC quand
++# ``WatchdogSec=`` est configuré dans l'unité. On envoie le "battement de
++# cœur" à la moitié de cet intervalle, comme recommandé par systemd (marge
++# de sécurité en cas de gigue).
++_WATCHDOG_HEARTBEAT_FALLBACK_SECONDS = 30.0
++
++
++def _watchdog_heartbeat_loop(backend: Backend, stop_event: threading.Event) -> None:
++    """Notifie systemd (``WATCHDOG=1``) tant que le service GSM est sain.
++
++    N'envoie **pas** de notification si ``GSMService.is_healthy()`` renvoie
++    ``False`` (reconnexion complète en cours ou échouée) : si ça dure plus
++    longtemps que ``WatchdogSec=`` dans l'unité systemd, systemd considère le
++    process comme figé et le tue/redémarre (``Restart=on-failure`` s'occupe
++    du reste). C'est le filet de sécurité de dernier recours, au-dessus des
++    actions correctives internes du ``GSMService``.
++
++    No-op silencieux si l'unité n'est pas ``Type=notify`` avec un
++    ``WatchdogSec=`` (dev, ``GARAGE_FAKE_SERIAL``, etc.).
++    """
++    if not watchdog_enabled():
++        return
++
++    try:
++        interval = int(os.environ["WATCHDOG_USEC"]) / 1_000_000 / 2
++    except (KeyError, ValueError):
++        interval = _WATCHDOG_HEARTBEAT_FALLBACK_SECONDS
++
++    logger.info("Watchdog systemd actif (heartbeat toutes les %.1fs).", interval)
++    while not stop_event.is_set():
++        try:
++            gsm_healthy = backend.services is not None and backend.services.gsm.is_healthy()
++        except Exception:  # pragma: no cover - défensif
++            gsm_healthy = False
++
++        if gsm_healthy:
++            sd_notify("WATCHDOG=1")
++        else:
++            logger.warning(
++                "Watchdog systemd : GSM non sain, pas de heartbeat "
++                "(le process sera redémarré si ça persiste)."
++            )
++        stop_event.wait(interval)
++
+ 
+ def _run_headless(backend: Backend, stop_event: threading.Event) -> None:
+     """Boucle backend seul : bloque jusqu'à réception d'un signal d'arrêt."""
+@@ -93,6 +139,16 @@ def main() -> int:
+         backend.stop()
+         return 1
+ 
++    # Signale à systemd que le démarrage est terminé (no-op si Type != notify).
++    sd_notify("READY=1")
++    watchdog_thread = threading.Thread(
++        target=_watchdog_heartbeat_loop,
++        args=(backend, stop_event),
++        name="systemd-watchdog",
++        daemon=True,
++    )
++    watchdog_thread.start()
++
+     try:
+         if config.web_enabled:
+             _run_web(backend, config, stop_event)
+@@ -101,6 +157,7 @@ def main() -> int:
+     except KeyboardInterrupt:  # pragma: no cover
+         pass
+     finally:
++        sd_notify("STOPPING=1")
+         backend.stop()
+         logger.info("=== Arrêt terminé ===")
+     return 0
+diff --git a/systemd/garage-controller.service b/systemd/garage-controller.service
+index db52702..7689a49 100644
+--- a/systemd/garage-controller.service
++++ b/systemd/garage-controller.service
+@@ -4,7 +4,17 @@ After=network.target
+ Wants=network.target
+ 
+ [Service]
+-Type=simple
++# Type=notify : le process signale lui-même READY=1 au démarrage et
++# WATCHDOG=1 périodiquement (voir run.py / app/utils/systemd_notify.py).
++# Si le GSM reste bloqué (threads morts, reconnexion série qui échoue), le
++# process arrête d'émettre WATCHDOG=1 et systemd le tue puis le redémarre
++# via Restart=on-failure — filet de sécurité au-dessus des tentatives de
++# récupération internes (reset logiciel, reconnexion série) du GSMService.
++Type=notify
++# Doit être strictement supérieur au double de l'intervalle de heartbeat
++# (calculé automatiquement à WatchdogSec/2 côté run.py).
++WatchdogSec=120
++NotifyAccess=main
+ # Adapter User/WorkingDirectory si l'installation diffère.
+ User=__USER__
+ Group=__USER__

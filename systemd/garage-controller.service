@@ -4,7 +4,17 @@ After=network.target
 Wants=network.target
 
 [Service]
-Type=simple
+# Type=notify : le process signale lui-même READY=1 au démarrage et
+# WATCHDOG=1 périodiquement (voir run.py / app/utils/systemd_notify.py).
+# Si le GSM reste bloqué (threads morts, reconnexion série qui échoue), le
+# process arrête d'émettre WATCHDOG=1 et systemd le tue puis le redémarre
+# via Restart=on-failure — filet de sécurité au-dessus des tentatives de
+# récupération internes (reset logiciel, reconnexion série) du GSMService.
+Type=notify
+# Doit être strictement supérieur au double de l'intervalle de heartbeat
+# (calculé automatiquement à WatchdogSec/2 côté run.py).
+WatchdogSec=120
+NotifyAccess=main
 # Adapter User/WorkingDirectory si l'installation diffère.
 User=__USER__
 Group=__USER__

@@ -175,3 +175,49 @@ Le texte doit rester court (limite de 160 caractères dans l’idéal ou 1–2 S
     - Appeler `send_daily_report()`.
 
 - Le rapport doit être journalisé comme un événement (dans les logs d’application).
+
+---
+
+## 4. Commandes SMS additionnelles (`CommandService`)
+
+En plus de `OUVRE`, `app/services/command_service.py` route les commandes
+suivantes (mots-clés configurables via `Setting`, comme `sms_command_open`) :
+
+- `STOP` — désactive le traitement des commandes SMS (`sms_enabled = false`).
+  Reste traitée même si `sms_enabled` est déjà à `false` (sinon `START` ne
+  serait jamais lu : verrouillage sans issue).
+- `START` — réactive (`sms_enabled = true`).
+- `STATUT` — répond un court résumé texte (modem, réseau, signal, état SMS,
+  échecs watchdog en cours).
+- `AJOUTE <numéro> [nom]` — ajoute un numéro à la whitelist (`Phone.enabled`).
+- `RAPPORT` — déclenche l'envoi immédiat du rapport quotidien (voir §3).
+
+Toutes ces commandes (sauf `OUVRE`) sont réservées aux numéros listés dans le
+`Setting` JSON `sms_admin_numbers`. **Si cette liste est vide (par défaut),
+tout numéro whitelisté est considéré admin** — comportement rétrocompatible,
+à restreindre en configurant `sms_admin_numbers` si on veut réserver ces
+commandes au(x) propriétaire(s).
+
+Le rate-limiting (`min_interval_sms_open_seconds`) ne s'applique qu'à `OUVRE`.
+
+---
+
+## 5. Watchdog GSM (auto-récupération)
+
+`GSMService` surveille le modem en tâche de fond (sonde `AT` toutes les
+`status_refresh_interval` secondes, ~20s) et agit automatiquement en cas de
+panne prolongée, sans intervention manuelle :
+
+- `gsm_soft_reset_after_failures` (défaut 3) sondes consécutives en échec →
+  reset logiciel du modem (`AT+CFUN=1,1`).
+- `gsm_hard_reconnect_after_failures` (défaut 9) sondes en échec, ou threads
+  du driver série détectés morts → reconnexion série complète (ferme/rouvre
+  `/dev/serial0`, relance les threads).
+- `gsm_watchdog_enabled` (défaut `true`) permet de désactiver entièrement ce
+  mécanisme si besoin.
+
+En complément, le service systemd (`Type=notify` + `WatchdogSec=120`) reçoit
+un battement de cœur tant que `GSMService.is_healthy()` est vrai ; si la
+reconnexion complète reste bloquée trop longtemps, systemd tue et redémarre
+tout le process (`Restart=on-failure`) — filet de sécurité de dernier
+recours au-dessus de la récupération interne.

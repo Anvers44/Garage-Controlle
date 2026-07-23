@@ -17,11 +17,10 @@ import logging
 import threading
 import time
 from datetime import datetime
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 
 from app.hardware.sim800 import SIM800, SIM800Error
 from app.models import RELAY_SOURCE_CALL, RELAY_SOURCE_SMS
-from app.services.command_service import CommandService
 from app.services.history_service import HistoryService
 from app.services.phone_service import PhoneService
 from app.services.relay_service import RelayService
@@ -54,16 +53,6 @@ class GSMService:
             history_service, settings_service, sim800
         )
         self._scheduler = ReportingScheduler(self._reporting, settings_service)
-
-        # Routeur de commandes (OUVRE/STOP/START/STATUT/AJOUTE/RAPPORT),
-        # partagé avec de futurs canaux (ex. Telegram) via la même instance.
-        self.commands = CommandService(
-            phone_service=phone_service,
-            relay_service=relay_service,
-            settings_service=settings_service,
-            status_provider=self.get_status,
-            report_trigger=self.send_daily_report_now,
-        )
 
         # Rate limiting SMS : dernier déclenchement (monotone) par numéro.
         self._last_sms_open: Dict[str, float] = {}
@@ -427,18 +416,11 @@ class GSMService:
         timestamp: Optional[datetime] = None,
         message_id: Optional[str] = None,
     ) -> None:
-        """Traite un SMS entrant (callback driver ``on_sms``).
+        """Traite un SMS entrant (callback driver ``on_sms``)."""
+        if not self._settings.get_bool("sms_enabled", default=True):
+            logger.debug("SMS ignoré (fonction SMS désactivée).")
+            return
 
-        Délègue l'interprétation de la commande à ``self.commands``
-        (``CommandService``, indépendant du canal). Deux réserves gérées ici,
-        propres au canal SMS :
-
-        - STOP/START restent traités même si ``sms_enabled`` est à ``false``
-          (sinon, une fois désactivé par STOP, plus aucun SMS — y compris
-          START — ne serait jamais lu : verrouillage sans issue).
-        - Le rate-limiting anti-abus ne s'applique qu'à ``OUVRE`` (les autres
-          commandes sont plus rares et déjà réservées aux numéros admin).
-        """
         number = normalize_number(raw_number)
         logger.info("SMS de %s : %r", number, text)
 
@@ -458,44 +440,8 @@ class GSMService:
             )
             return
 
-        tokens = (text or "").strip().split()
-        keyword = tokens[0].strip().upper() if tokens else ""
-        stop_keyword = (self._settings.get("sms_command_stop", "STOP") or "STOP").strip().upper()
-        start_keyword = (
-            self._settings.get("sms_command_start", "START") or "START"
-        ).strip().upper()
-        open_keyword = (self._settings.get("sms_command_open", "OUVRE") or "OUVRE").strip().upper()
-        is_toggle_cmd = keyword in (stop_keyword, start_keyword)
-
-        if not is_toggle_cmd and not self._settings.get_bool("sms_enabled", default=True):
-            logger.debug("SMS ignoré (fonction SMS désactivée, sauf STOP/START).")
-            self._history.record_call(
-                phone_number=number,
-                authorized=True,
-                answered=False,
-                relay_triggered=False,
-                phone_id=phone_id,
-                source="sms",
-            )
-            return
-
-        if keyword == open_keyword and not self._check_and_update_rate_limit(number):
-            logger.info("Commande SMS ignorée (rate limit) : %s", number)
-            self._history.record_call(
-                phone_number=number,
-                authorized=True,
-                answered=False,
-                relay_triggered=False,
-                phone_id=phone_id,
-                source="sms",
-            )
-            return
-
-        result = self.commands.dispatch(
-            number=number, phone=phone, text=text, source=RELAY_SOURCE_SMS
-        )
-
-        if not result.recognized:
+        is_open_cmd, valid = self._parse_sms_command(text)
+        if not (is_open_cmd and valid):
             logger.info("Commande SMS invalide de %s : %r", number, text)
             self._history.record_call(
                 phone_number=number,
@@ -507,25 +453,44 @@ class GSMService:
             )
             return
 
+        # Rate limiting.
+        if not self._check_and_update_rate_limit(number):
+            logger.info("Commande SMS ignorée (rate limit) : %s", number)
+            self._history.record_call(
+                phone_number=number,
+                authorized=True,
+                answered=False,
+                relay_triggered=False,
+                phone_id=phone_id,
+                source="sms",
+            )
+            return
+
+        relay_triggered = False
+        try:
+            self._relay.trigger(
+                source=RELAY_SOURCE_SMS,
+                phone_id=phone_id,
+                metadata={"number": number, "message_id": message_id, "command": text},
+            )
+            relay_triggered = True
+        except Exception:  # pragma: no cover - défensif
+            logger.exception("Erreur lors du déclenchement du relais (SMS)")
+
         self._history.record_call(
             phone_number=number,
             authorized=True,
             answered=False,
-            relay_triggered=result.relay_triggered,
+            relay_triggered=relay_triggered,
             phone_id=phone_id,
             source="sms",
         )
 
-        if result.reply_text:
-            self._send_reply(number, result.reply_text)
+        if relay_triggered and self._settings.get_bool("sms_reply_enabled", default=False):
+            reply = self._settings.get("sms_reply_text", "Garage ouvert") or "Garage ouvert"
+            self._send_reply(number, reply)
 
-        logger.info(
-            "Commande '%s' traitée pour %s (relais=%s, rejetée=%s)",
-            result.command,
-            number,
-            result.relay_triggered,
-            result.rejected,
-        )
+        logger.info("Ouverture par SMS effectuée pour %s", number)
 
     def _send_reply(self, number: str, text: str, attempts: int = 2) -> bool:
         """Envoie le SMS de confirmation, avec une nouvelle tentative si besoin.
@@ -553,6 +518,28 @@ class GSMService:
     # ------------------------------------------------------------------ #
     # Helpers SMS
     # ------------------------------------------------------------------ #
+    def _parse_sms_command(self, text: str) -> Tuple[bool, bool]:
+        """Analyse le texte du SMS.
+
+        Returns:
+            ``(is_open_command, is_valid)`` :
+            - ``is_open_command`` : le message correspond bien à la commande
+              d'ouverture (indépendamment du PIN).
+            - ``is_valid`` : commande reconnue ET PIN correct (si requis).
+        """
+        command_open = (self._settings.get("sms_command_open", "OUVRE") or "OUVRE").strip().upper()
+        pin = (self._settings.get("sms_command_pin", "") or "").strip()
+
+        tokens = (text or "").strip().upper().split()
+        if not tokens or tokens[0] != command_open:
+            return (False, False)
+
+        if not pin:
+            return (True, True)
+
+        provided = tokens[1] if len(tokens) > 1 else ""
+        return (True, provided == pin.upper())
+
     def _check_and_update_rate_limit(self, number: str) -> bool:
         """Retourne ``True`` si l'ouverture est autorisée, et note l'horodatage.
 

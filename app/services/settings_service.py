@@ -25,11 +25,29 @@ DEFAULT_SETTINGS: Dict[str, str] = {
     "sms_reply_enabled": "false",
     "sms_reply_text": "Garage ouvert",
     "min_interval_sms_open_seconds": "30",
+    # Commandes SMS additionnelles (voir CommandService). Réservées aux
+    # numéros de ``sms_admin_numbers`` (tous les numéros whitelist si vide).
+    "sms_command_stop": "STOP",
+    "sms_command_start": "START",
+    "sms_command_status": "STATUT",
+    "sms_command_add": "AJOUTE",
+    "sms_command_report": "RAPPORT",
+    "sms_admin_numbers": "[]",  # JSON : liste de numéros (vide = tous admin)
     # Rapport quotidien
     "report_enabled": "false",
     "report_time": "20:00",
     "report_recipients": "[]",  # JSON : liste de numéros
     "report_include_sms": "true",
+    # Watchdog GSM (auto-récupération si le modem ne répond plus)
+    "gsm_watchdog_enabled": "true",
+    # Nombre de sondes AT consécutives en échec avant un reset logiciel du
+    # modem (AT+CFUN=1,1). Sondes espacées de ~20s (status_refresh_interval).
+    "gsm_soft_reset_after_failures": "3",
+    # Nombre de sondes en échec avant une reconnexion série complète
+    # (ferme/rouvre /dev/serial0 + relance les threads du driver). Plus
+    # radical que le reset logiciel : couvre un port série/thread figé que
+    # AT+CFUN seul ne débloque pas.
+    "gsm_hard_reconnect_after_failures": "9",
 }
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "oui"}
